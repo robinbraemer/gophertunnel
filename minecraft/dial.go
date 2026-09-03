@@ -85,6 +85,13 @@ type Dialer struct {
 	// from which the packet originated, and the destination address.
 	PacketFunc func(header packet.Header, payload []byte, src, dst net.Addr)
 
+	// InternalPacketFunc observes packet types decoded on the connection's
+	// internal dispatch paths, including the login/spawn state machine. Unlike
+	// PacketFunc it never receives a payload, decoded packet value, address,
+	// identity, or server text. It is intended for deterministic test assertions
+	// around packets handled before ReadPacket can return them.
+	InternalPacketFunc func(InternalPacket)
+
 	// DownloadResourcePack is called individually for every texture and behaviour pack sent by the connection when
 	// using Dialer.Dial(), and can be used to stop the pack from being downloaded. The function is called with the UUID
 	// and version of the resource pack, the number of the current pack being downloaded, and the total amount of packs.
@@ -293,6 +300,7 @@ func (d Dialer) DialContextNetwork(ctx context.Context, network Network, address
 	conn.identityData = d.IdentityData
 	conn.clientData = d.ClientData
 	conn.packetFunc = d.PacketFunc
+	conn.internalPacketFunc = d.InternalPacketFunc
 	conn.downloadResourcePack = d.DownloadResourcePack
 	conn.resourcePackCache = d.ResourcePackCache
 	conn.cacheEnabled = d.EnableClientCache
