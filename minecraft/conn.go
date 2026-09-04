@@ -12,6 +12,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -193,11 +194,22 @@ type Conn struct {
 
 	// packetFunc is an optional function passed to a Dial() call. If set, each packet read from and written
 	// to this connection will call this function.
-	packetFunc func(header packet.Header, payload []byte, src, dst net.Addr)
+	packetFunc         func(header packet.Header, payload []byte, src, dst net.Addr)
+	internalPacketFunc func(InternalPacket)
+	internalPacketSeq  atomic.Uint64
 
 	shieldID atomic.Int32
 
 	additional chan packet.Packet
+}
+
+// InternalPacket is a metadata-only observation of a packet decoded on Conn's
+// internal dispatch paths, including packets consumed during login/spawning.
+// Name is the concrete protocol packet type without package/payload data;
+// Sequence is monotonically increasing per Conn.
+type InternalPacket struct {
+	Sequence uint64
+	Name     string
 }
 
 // newConn creates a new Minecraft connection for the net.Conn passed, reading and writing compressed
@@ -431,6 +443,7 @@ func (conn *Conn) ReadPacket() (pk packet.Packet, err error) {
 		if len(pk) == 0 {
 			return conn.ReadPacket()
 		}
+		conn.observeInternalPackets(pk)
 		for _, additional := range pk[1:] {
 			conn.additional <- additional
 		}
@@ -451,6 +464,7 @@ func (conn *Conn) ReadPacket() (pk packet.Packet, err error) {
 		if len(pk) == 0 {
 			return conn.ReadPacket()
 		}
+		conn.observeInternalPackets(pk)
 		for _, additional := range pk[1:] {
 			conn.additional <- additional
 		}
@@ -696,6 +710,7 @@ func (conn *Conn) handle(pkData *packetData) error {
 			if err != nil {
 				return err
 			}
+			conn.observeInternalPackets(pks)
 			return conn.handleMultiple(pks)
 		}
 	}
@@ -703,6 +718,19 @@ func (conn *Conn) handle(pkData *packetData) error {
 	// be handled by the user.
 	conn.deferPacket(pkData)
 	return nil
+}
+
+func (conn *Conn) observeInternalPackets(pks []packet.Packet) {
+	if conn.internalPacketFunc == nil {
+		return
+	}
+	for _, pk := range pks {
+		name := reflect.TypeOf(pk).Elem().Name()
+		conn.internalPacketFunc(InternalPacket{
+			Sequence: conn.internalPacketSeq.Add(1),
+			Name:     name,
+		})
+	}
 }
 
 // handleMultiple handles multiple packets and returns an error if at least one of those packets could not be handled
